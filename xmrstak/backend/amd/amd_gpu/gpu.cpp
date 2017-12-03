@@ -330,9 +330,13 @@ size_t InitOpenCLGpu(cl_context opencl_ctx, GpuContext* ctx, const char* source_
 		return ERR_OCL_API;
 	}
 
-	char options[256];
+	// Even though there is no float data types, I'm going to toggle fast-relaxed-math and see what happens
+	char options[512];
 	snprintf(options, sizeof(options), 
-		"-DITERATIONS=%d -DMASK=%d -DWORKSIZE=%llu", hasIterations, threadMemMask, int_port(ctx->workSize));
+		"-cl-mad-enable -cl-fast-relaxed-math -DITERATIONS=%d -DMASK=%d -DWORKSIZE=%llu", hasIterations, threadMemMask, int_port(ctx->workSize));
+
+ //-cl - fast - relaxed - math
+
 	ret = clBuildProgram(ctx->Program, 1, &ctx->DeviceID, options, NULL, NULL);
 	if(ret != CL_SUCCESS)
 	{

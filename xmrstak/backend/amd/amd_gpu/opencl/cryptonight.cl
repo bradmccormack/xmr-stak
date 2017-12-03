@@ -14,6 +14,12 @@ R"===(
   * along with this program.  If not, see <http://www.gnu.org/licenses/>.
   */
 
+
+  /*
+  TODO - Read through more of this and see what I can implement
+  http://developer.amd.com/amd-accelerated-parallel-processing-app-sdk/opencl-optimization-guide
+  */
+
 #ifdef cl_amd_media_ops
 #pragma OPENCL EXTENSION cl_amd_media_ops : enable
 #else
@@ -66,6 +72,7 @@ inline int amd_bfe(const uint src0, const uint offset, const uint width)
 	 *      return 0;
 	 * @endcode
 	 */
+	 // Control flow optimisation ?? http://developer.amd.com/amd-accelerated-parallel-processing-app-sdk/opencl-optimization-guide/#50401334_pgfId-448804
 	if ( (offset + width) < 32u )
 		return (src0 << (32u - offset - width)) >> (32u - width);
 
@@ -119,6 +126,8 @@ static const __constant uchar sbox[256] =
 
 void keccakf1600(ulong *s)
 {
+
+	#pragma unroll
     for(int i = 0; i < 24; ++i) 
     {
 		ulong bc[5], tmp1, tmp2;
@@ -373,6 +382,7 @@ void CNKeccak(ulong *output, ulong *input)
 	ulong st[25];
 	
 	// Copy 72 bytes
+	#pragma unroll
 	for(int i = 0; i < 9; ++i) st[i] = input[i];
 	
 	// Last four and '1' bit for padding
@@ -387,6 +397,7 @@ void CNKeccak(ulong *output, ulong *input)
 	
 	keccakf1600_1(st);
 	
+	#pragma unroll
 	for(int i = 0; i < 25; ++i) output[i] = st[i];
 }
 
@@ -685,10 +696,32 @@ __kernel void Skein(__global ulong *states, __global uint *BranchBuf, __global u
 		ulong t[3] = { 0x00UL, 0x7000000000000000UL, 0x00UL };
 		ulong8 p, m;
 
+		#pragma unroll
 		for(uint i = 0; i < 4; ++i)
 		{
+			// Control flow optimisation ??
+			// http://developer.amd.com/amd-accelerated-parallel-processing-app-sdk/opencl-optimization-guide/#50401334_pgfId-448804
+			// Is this ternary operation better than the select statement
+
+			/*
+			A conditional of the form “if-then-else” generates branching. Use the select() function to replace these structures with conditional assignments that do not cause branching. For example:
+
+if(x==1) r=0.5;
+if(x==2) r=1.0;
+
+becomes
+
+r = select(r, 0.5, x==1);
+r = select(r, 1.0, x==2);
+*/
+
+			t[0]+= (i < 3) ? 0x40UL : 0x08UL;
+			
+			
+			/*
 			if(i < 3) t[0] += 0x40UL;
 			else t[0] += 0x08UL;
+			*/
 
 			t[2] = t[0] ^ t[1];
 
@@ -698,8 +731,18 @@ __kernel void Skein(__global ulong *states, __global uint *BranchBuf, __global u
 
 			h = m ^ p;
 
+			/*
+			t[1] = 0xB000000000000000UL;
+			t[1] = select(t[1], 0x3000000000000000UL, i < 2);
+			*/
+			
+			t[1] = (i < 2) ? 0x3000000000000000UL : 0xB000000000000000UL;
+
+			/*
 			if(i < 2) t[1] = 0x3000000000000000UL;
 			else t[1] = 0xB000000000000000UL;
+			*/
+			
 		}
 
 		t[0] = 0x08UL;
@@ -715,12 +758,21 @@ __kernel void Skein(__global ulong *states, __global uint *BranchBuf, __global u
 
 		// Note that comparison is equivalent to subtraction - we can't just compare 8 32-bit values
 		// and expect an accurate result for target > 32-bit without implementing carries
+		// TODO Refactor control flow optimisiation ?
+
+		/*
+		ulong outIdx = atomic_inc(output + 0xFF);
+		uint current_output = output[outIdx];
+		output[outIdx] = (p.s3 <= Target) ? (outIdx < 0xFF) ? BranchBuf[idx] + get_global_offset(0) : current_output : current_output;
+		*/
+		
 		if(p.s3 <= Target)
 		{
 			ulong outIdx = atomic_inc(output + 0xFF);
 			if(outIdx < 0xFF)
 				output[outIdx] = BranchBuf[idx] + get_global_offset(0);
 		}
+		
 	}
 	mem_fence(CLK_GLOBAL_MEM_FENCE);	
 }
@@ -740,9 +792,14 @@ __kernel void JH(__global ulong *states, __global uint *BranchBuf, __global uint
 		sph_u64 h4h = 0x754D2E7F8996A371UL, h4l = 0x62E27DF70849141DUL, h5h = 0x948F2476F7957627UL, h5l = 0x6C29804757B6D587UL, h6h = 0x6C0D8EAC2D275E5CUL, h6l = 0x0F7A0557C6508451UL, h7h = 0xEA12247067D3E47BUL, h7l = 0x69D71CD313ABE389UL;
 		sph_u64 tmp;
 
+		// Surely some of this can be re-factored ?
 		for(int i = 0; i < 5; ++i)
 		{
 			ulong input[8];
+
+			//int lowerBound = (i == 3) ? 2 : 0;
+			//int upperBound = (i > 3) ? 7 : 8;
+			//int initializer_value = (i < 3) ? 
 
 			if(i < 3)
 			{
@@ -815,6 +872,7 @@ __kernel void Blake(__global ulong *states, __global uint *BranchBuf, __global u
 
 		((uint8 *)h)[0] = vload8(0U, c_IV256);
 
+		// More refactoring TODO , loop unrolling + control flow mods
 		for(uint i = 0, bitlen = 0; i < 4; ++i)
 		{
 			if(i < 3)
@@ -829,6 +887,7 @@ __kernel void Blake(__global ulong *states, __global uint *BranchBuf, __global u
 				m[1] = SWAP4(((__global uint *)states)[49]);
 				m[2] = 0x80000000U;
 
+				#pragma unroll
 				for(int i = 3; i < 13; ++i) m[i] = 0x00U;
 
 				m[13] = 1U;
@@ -861,6 +920,7 @@ __kernel void Blake(__global ulong *states, __global uint *BranchBuf, __global u
 			((uint8 *)h)[0] ^= ((uint8 *)v)[0] ^ ((uint8 *)v)[1];
 		}
 
+		#pragma unroll
 		for(int i = 0; i < 8; ++i) h[i] = SWAP4(h[i]);
 
 		// Note that comparison is equivalent to subtraction - we can't just compare 8 32-bit values
@@ -886,6 +946,7 @@ __kernel void Groestl(__global ulong *states, __global uint *BranchBuf, __global
 
 		ulong State[8];
 
+		#pragma unroll
 		for(int i = 0; i < 7; ++i) State[i] = 0UL;
 
 		State[7] = 0x0001000000000000UL;
@@ -918,10 +979,12 @@ __kernel void Groestl(__global ulong *states, __global uint *BranchBuf, __global
 
 		ulong tmp[8];
 
+		#pragma unroll
 		for(int i = 0; i < 8; ++i) tmp[i] = State[i];
 
 		PERM_SMALL_P(State);
 
+		#pragma unroll
 		for(int i = 0; i < 8; ++i) State[i] ^= tmp[i];
 
 		// Note that comparison is equivalent to subtraction - we can't just compare 8 32-bit values
